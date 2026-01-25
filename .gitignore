@@ -1,0 +1,62 @@
+# Build results
+[Bb]in/
+[Oo]bj/
+[Oo]ut/
+publish/
+
+# .NET artifacts
+*.user
+*.suo
+*.userosscache
+*.sln.docstates
+*.nuget.props
+*.nuget.targets
+
+# NuGet packages
+packages/
+*.nupkg
+!*.nupkg/
+*.snupkg
+.nuget/
+
+# IDE
+.vs/
+.vscode/
+*.swp
+*.swo
+.idea/
+*.DotSettings.user
+
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+
+# Windows
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+
+# User-specific files
+*.rsuser
+*.pidb
+*.scc
+*.dbmdl
+*.dbproj.schemaview
+*.pfx
+*.publishsettings
+
+# Test results
+[Tt]est[Rr]esult*/
+*.trx
+*.coverage
+*.coveragexml
+
+# Build logs
+msbuild.log
+msbuild.err
+msbuild.wrn
+
+# Published AOT binaries (keep bin/ for hook scripts to find binaries)
+# Uncomment below if you don't want to commit binaries:
+# bin/coordinator-*

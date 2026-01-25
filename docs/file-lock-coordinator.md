@@ -904,22 +904,23 @@ mv bin/FileLockCoordinator.exe bin/coordinator-win-x64.exe
 
 ### Phase 2: Hook Integration
 
-- [ ] ensure-coordinator.sh (SessionStart)
-- [ ] request-lock.sh (PreToolUse)
-- [ ] release-lock.sh (PostToolUse)
+- [x] ensure-coordinator.sh (SessionStart)
+- [x] request-lock.sh (PreToolUse)
+- [x] release-lock.sh (PostToolUse)
 - [ ] Plugin manifest (plugin.json)
 
 ### Phase 3: Testing & Polish
 
-- [ ] Unit tests with manual fakes
+- [x] Unit tests with manual fakes (17 tests)
 - [ ] Integration tests against AOT binary
 - [ ] Graceful shutdown
 - [ ] Logging configuration
-- [ ] Status endpoint with queue info
+- [x] Status endpoint with queue info
 
 ### Phase 4: Distribution
 
-- [ ] Build binaries for all platforms
+- [x] Build binary for macOS ARM64 (9 MB)
+- [ ] Build binaries for other platforms
 - [ ] Create plugin package
 - [ ] GitHub release workflow
 - [ ] Documentation

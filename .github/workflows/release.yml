@@ -1,0 +1,107 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+          dotnet-quality: 'preview'
+
+      - name: Restore dependencies
+        run: dotnet restore
+
+      - name: Build
+        run: dotnet build --no-restore
+
+      - name: Test
+        run: dotnet test --no-build --verbosity normal
+
+  build:
+    needs: test
+    strategy:
+      matrix:
+        include:
+          - os: macos-14
+            rid: osx-arm64
+            artifact: coordinator-osx-arm64
+          - os: macos-13
+            rid: osx-x64
+            artifact: coordinator-osx-x64
+          - os: ubuntu-latest
+            rid: linux-x64
+            artifact: coordinator-linux-x64
+          - os: windows-latest
+            rid: win-x64
+            artifact: coordinator-win-x64.exe
+
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+          dotnet-quality: 'preview'
+
+      - name: Publish AOT binary
+        run: |
+          dotnet publish FileLockCoordinator -c Release -r ${{ matrix.rid }} --self-contained /p:PublishAot=true -o publish/
+
+      - name: Rename binary (Unix)
+        if: runner.os != 'Windows'
+        run: mv publish/FileLockCoordinator publish/${{ matrix.artifact }}
+
+      - name: Rename binary (Windows)
+        if: runner.os == 'Windows'
+        run: mv publish/FileLockCoordinator.exe publish/${{ matrix.artifact }}
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact }}
+          path: publish/${{ matrix.artifact }}
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Prepare release assets
+        run: |
+          mkdir -p release
+          cp artifacts/coordinator-osx-arm64/coordinator-osx-arm64 release/
+          cp artifacts/coordinator-osx-x64/coordinator-osx-x64 release/
+          cp artifacts/coordinator-linux-x64/coordinator-linux-x64 release/
+          cp artifacts/coordinator-win-x64.exe/coordinator-win-x64.exe release/
+          chmod +x release/coordinator-osx-arm64 release/coordinator-osx-x64 release/coordinator-linux-x64
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            release/coordinator-osx-arm64
+            release/coordinator-osx-x64
+            release/coordinator-linux-x64
+            release/coordinator-win-x64.exe
+          generate_release_notes: true
+          draft: false
+          prerelease: ${{ contains(github.ref, '-') }}

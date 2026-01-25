@@ -1,0 +1,27 @@
+{
+  "name": "file-lock-coordinator",
+  "version": "1.0.0",
+  "description": "Cooperative file locking for multi-agent Claude Code workflows",
+  "hooks": {
+    "SessionStart": [
+      {
+        "type": "command",
+        "command": "${CLAUDE_PLUGIN_ROOT}/hooks/ensure-coordinator.sh"
+      }
+    ],
+    "PreToolUse": [
+      {
+        "matcher": "Edit|Write",
+        "type": "command",
+        "command": "${CLAUDE_PLUGIN_ROOT}/hooks/request-lock.sh --wait --timeout 60"
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "Edit|Write",
+        "type": "command",
+        "command": "${CLAUDE_PLUGIN_ROOT}/hooks/release-lock.sh"
+      }
+    ]
+  }
+}

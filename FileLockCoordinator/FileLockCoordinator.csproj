@@ -10,4 +10,8 @@
     <OptimizationPreference>Size</OptimizationPreference>
   </PropertyGroup>
 
+  <ItemGroup>
+    <InternalsVisibleTo Include="FileLockCoordinator.Tests" />
+  </ItemGroup>
+
 </Project>

@@ -13,4 +13,4 @@ namespace FileLockCoordinator;
 [JsonSerializable(typeof(LockInfo))]
 [JsonSerializable(typeof(IReadOnlyList<LockInfo>))]
 [JsonSourceGenerationOptions(PropertyNamingPolicy = JsonKnownNamingPolicy.CamelCase)]
-internal partial class AppJsonContext : JsonSerializerContext { }
+public partial class AppJsonContext : JsonSerializerContext { }

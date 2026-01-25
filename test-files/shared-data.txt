@@ -1,0 +1,38 @@
+# Shared Data Registry
+# This file tracks items that multiple agents need to modify
+# The file lock coordinator ensures only one agent edits at a time
+
+## Inventory Items
+| ID    | Name              | Quantity | Price  | Status    |
+|-------|-------------------|----------|--------|-----------|
+| 001   | Widget Alpha      | 150      | 29.99  | active    |
+| 002   | Widget Beta       | 75       | 49.99  | active    |
+| 003   | Gadget Pro        | 200      | 99.99  | active    |
+| 004   | Gadget Lite       | 300      | 59.99  | active    |
+| 005   | Component X       | 500      | 9.99   | active    |
+| 006   | Component Y       | 450      | 12.99  | active    |
+| 007   | Assembly Kit A    | 80       | 149.99 | active    |
+| 008   | Assembly Kit B    | 60       | 199.99 | active    |
+| 009   | Spare Part 1      | 1000     | 4.99   | active    |
+| 010   | Spare Part 2      | 800      | 6.99   | active    |
+
+## Task Queue
+| Task ID | Description                     | Assigned To | Priority | Status   |
+|---------|---------------------------------|-------------|----------|----------|
+| T-001   | Update inventory counts         | pending     | high     | open     |
+| T-002   | Review pricing structure        | pending     | medium   | open     |
+| T-003   | Add new product category        | pending     | low      | open     |
+| T-004   | Remove discontinued items       | pending     | medium   | open     |
+| T-005   | Update supplier information     | pending     | high     | open     |
+
+## Change Log
+| Timestamp           | Agent    | Change Description                          |
+|---------------------|----------|---------------------------------------------|
+| 2024-01-01 10:00:00 | system   | Initial file creation                       |
+| 2024-01-01 10:05:00 | system   | Added inventory section                     |
+| 2024-01-01 10:10:00 | system   | Added task queue section                    |
+
+## Agent Workspace
+# Each agent should add their changes below this line
+# ===================================================
+

@@ -1,6 +1,11 @@
-# Build results
-[Bb]in/
-[Oo]bj/
+# Build results (project bin/obj)
+**/[Bb]in/
+**/[Oo]bj/
+
+# Keep root bin/ for AOT binaries
+!/bin/
+/bin/*
+!/bin/coordinator-*
 [Oo]ut/
 publish/
 

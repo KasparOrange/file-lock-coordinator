@@ -2,49 +2,66 @@ namespace FileLockCoordinator.Tests;
 
 public class LockStoreTests {
     [Fact]
-    public void TryAcquire_WhenLockAvailable_ReturnsTrue() {
+    public void EnqueueOrAcquire_WhenQueueEmpty_AcquiresImmediately() {
         var store = new LockStore();
 
-        var result = store.TryAcquire("/path/file.cs", "session-1");
+        var result = store.EnqueueOrAcquire("/path/file.cs", "session-1");
 
-        Assert.True(result);
+        Assert.True(result.Acquired);
+        Assert.Equal(1, result.Position);
+        Assert.Equal(1, result.QueueLength);
     }
 
     [Fact]
-    public void TryAcquire_WhenLockHeldByOther_ReturnsFalse() {
+    public void EnqueueOrAcquire_WhenQueueOccupied_JoinsQueue() {
         var store = new LockStore();
-        store.TryAcquire("/path/file.cs", "session-1");
+        store.EnqueueOrAcquire("/path/file.cs", "session-1");
 
-        var result = store.TryAcquire("/path/file.cs", "session-2");
+        var result = store.EnqueueOrAcquire("/path/file.cs", "session-2");
 
-        Assert.False(result);
+        Assert.False(result.Acquired);
+        Assert.Equal(2, result.Position);
+        Assert.Equal(2, result.QueueLength);
     }
 
     [Fact]
-    public void TryAcquire_WhenLockHeldBySelf_ReturnsTrue() {
+    public void EnqueueOrAcquire_WhenAlreadyHolder_ReturnsAcquired() {
         var store = new LockStore();
-        store.TryAcquire("/path/file.cs", "session-1");
+        store.EnqueueOrAcquire("/path/file.cs", "session-1");
 
-        var result = store.TryAcquire("/path/file.cs", "session-1");
+        var result = store.EnqueueOrAcquire("/path/file.cs", "session-1");
 
-        Assert.True(result);
+        Assert.True(result.Acquired);
+        Assert.Equal(1, result.Position);
     }
 
     [Fact]
-    public void TryAcquire_DifferentFiles_BothSucceed() {
+    public void EnqueueOrAcquire_WhenAlreadyInQueue_ReturnsSamePosition() {
+        var store = new LockStore();
+        store.EnqueueOrAcquire("/path/file.cs", "session-1");
+        store.EnqueueOrAcquire("/path/file.cs", "session-2");
+
+        var result = store.EnqueueOrAcquire("/path/file.cs", "session-2");
+
+        Assert.False(result.Acquired);
+        Assert.Equal(2, result.Position);
+    }
+
+    [Fact]
+    public void EnqueueOrAcquire_DifferentFiles_BothAcquire() {
         var store = new LockStore();
 
-        var result1 = store.TryAcquire("/path/file1.cs", "session-1");
-        var result2 = store.TryAcquire("/path/file2.cs", "session-2");
+        var result1 = store.EnqueueOrAcquire("/path/file1.cs", "session-1");
+        var result2 = store.EnqueueOrAcquire("/path/file2.cs", "session-2");
 
-        Assert.True(result1);
-        Assert.True(result2);
+        Assert.True(result1.Acquired);
+        Assert.True(result2.Acquired);
     }
 
     [Fact]
     public void TryRelease_WhenHoldingLock_ReturnsTrue() {
         var store = new LockStore();
-        store.TryAcquire("/path/file.cs", "session-1");
+        store.EnqueueOrAcquire("/path/file.cs", "session-1");
 
         var result = store.TryRelease("/path/file.cs", "session-1");
 
@@ -53,9 +70,10 @@ public class LockStoreTests {
     }
 
     [Fact]
-    public void TryRelease_WhenNotHoldingLock_ReturnsFalse() {
+    public void TryRelease_WhenNotHolder_ReturnsFalse() {
         var store = new LockStore();
-        store.TryAcquire("/path/file.cs", "session-1");
+        store.EnqueueOrAcquire("/path/file.cs", "session-1");
+        store.EnqueueOrAcquire("/path/file.cs", "session-2"); // In queue but not holder
 
         var result = store.TryRelease("/path/file.cs", "session-2");
 
@@ -63,7 +81,7 @@ public class LockStoreTests {
     }
 
     [Fact]
-    public void TryRelease_WhenNoLockExists_ReturnsFalse() {
+    public void TryRelease_WhenNoQueueExists_ReturnsFalse() {
         var store = new LockStore();
 
         var result = store.TryRelease("/path/file.cs", "session-1");
@@ -72,22 +90,22 @@ public class LockStoreTests {
     }
 
     [Fact]
-    public void TryRelease_AllowsOtherToAcquire() {
+    public void TryRelease_PromotesNextInQueue() {
         var store = new LockStore();
-        store.TryAcquire("/path/file.cs", "session-1");
+        store.EnqueueOrAcquire("/path/file.cs", "session-1");
+        store.EnqueueOrAcquire("/path/file.cs", "session-2");
+
         store.TryRelease("/path/file.cs", "session-1");
 
-        var result = store.TryAcquire("/path/file.cs", "session-2");
-
-        Assert.True(result);
+        Assert.Equal("session-2", store.GetHolder("/path/file.cs"));
     }
 
     [Fact]
     public void ReleaseAll_ReleasesAllLocksForSession() {
         var store = new LockStore();
-        store.TryAcquire("/path/file1.cs", "session-1");
-        store.TryAcquire("/path/file2.cs", "session-1");
-        store.TryAcquire("/path/file3.cs", "session-2");
+        store.EnqueueOrAcquire("/path/file1.cs", "session-1");
+        store.EnqueueOrAcquire("/path/file2.cs", "session-1");
+        store.EnqueueOrAcquire("/path/file3.cs", "session-2");
 
         var count = store.ReleaseAll("session-1");
 
@@ -100,7 +118,7 @@ public class LockStoreTests {
     [Fact]
     public void ReleaseAll_ReturnsZeroWhenNoLocksHeld() {
         var store = new LockStore();
-        store.TryAcquire("/path/file.cs", "session-1");
+        store.EnqueueOrAcquire("/path/file.cs", "session-1");
 
         var count = store.ReleaseAll("session-2");
 
@@ -110,7 +128,7 @@ public class LockStoreTests {
     [Fact]
     public void GetHolder_ReturnsSessionWhenLocked() {
         var store = new LockStore();
-        store.TryAcquire("/path/file.cs", "session-1");
+        store.EnqueueOrAcquire("/path/file.cs", "session-1");
 
         var holder = store.GetHolder("/path/file.cs");
 
@@ -118,7 +136,7 @@ public class LockStoreTests {
     }
 
     [Fact]
-    public void GetHolder_ReturnsNullWhenNotLocked() {
+    public void GetHolder_ReturnsNullWhenNoQueue() {
         var store = new LockStore();
 
         var holder = store.GetHolder("/path/file.cs");
@@ -127,10 +145,27 @@ public class LockStoreTests {
     }
 
     [Fact]
-    public void GetAllLocks_ReturnsAllActiveLocks() {
+    public void GetQueueInfo_ReturnsQueueDetails() {
         var store = new LockStore();
-        store.TryAcquire("/path/file1.cs", "session-1");
-        store.TryAcquire("/path/file2.cs", "session-2");
+        store.EnqueueOrAcquire("/path/file.cs", "session-1");
+        store.EnqueueOrAcquire("/path/file.cs", "session-2");
+        store.EnqueueOrAcquire("/path/file.cs", "session-3");
+
+        var info = store.GetQueueInfo("/path/file.cs");
+
+        Assert.NotNull(info);
+        Assert.Equal("session-1", info.Holder);
+        Assert.Equal(3, info.QueueLength);
+        Assert.Equal(2, info.Waiters.Count);
+        Assert.Equal("session-2", info.Waiters[0]);
+        Assert.Equal("session-3", info.Waiters[1]);
+    }
+
+    [Fact]
+    public void GetAllLocks_ReturnsAllActiveHolders() {
+        var store = new LockStore();
+        store.EnqueueOrAcquire("/path/file1.cs", "session-1");
+        store.EnqueueOrAcquire("/path/file2.cs", "session-2");
 
         var locks = store.GetAllLocks();
 
@@ -140,7 +175,7 @@ public class LockStoreTests {
     }
 
     [Fact]
-    public void GetAllLocks_ReturnsEmptyWhenNoLocks() {
+    public void GetAllLocks_ReturnsEmptyWhenNoQueues() {
         var store = new LockStore();
 
         var locks = store.GetAllLocks();
@@ -149,40 +184,69 @@ public class LockStoreTests {
     }
 
     [Fact]
-    public async Task TryAcquire_WhenLockExpired_GrantsLock() {
-        var store = new LockStore(ttl: TimeSpan.FromMilliseconds(50));
-        store.TryAcquire("/path/file.cs", "session-1");
+    public void GetAllQueues_ReturnsAllQueuesWithWaiters() {
+        var store = new LockStore();
+        store.EnqueueOrAcquire("/path/file1.cs", "session-1");
+        store.EnqueueOrAcquire("/path/file1.cs", "session-2");
+        store.EnqueueOrAcquire("/path/file2.cs", "session-3");
 
-        await Task.Delay(100); // Wait for TTL to expire
+        var queues = store.GetAllQueues();
 
-        var result = store.TryAcquire("/path/file.cs", "session-2");
-        Assert.True(result);
+        Assert.Equal(2, queues.Count);
+        var q1 = queues.First(q => q.File == "/path/file1.cs");
+        Assert.Equal("session-1", q1.Holder);
+        Assert.Equal(2, q1.QueueLength);
+        Assert.Single(q1.Waiters);
     }
 
     [Fact]
-    public async Task WaitForReleaseAsync_ReturnsWhenLockReleased() {
+    public async Task EnqueueOrAcquire_WhenHolderExpired_EvictsAndGrants() {
+        var store = new LockStore(ttl: TimeSpan.FromMilliseconds(50));
+        store.EnqueueOrAcquire("/path/file.cs", "session-1");
+
+        await Task.Delay(100); // Wait for TTL to expire
+
+        var result = store.EnqueueOrAcquire("/path/file.cs", "session-2");
+        Assert.True(result.Acquired);
+        Assert.Equal("session-2", store.GetHolder("/path/file.cs"));
+    }
+
+    [Fact]
+    public async Task WaitForTurnAsync_ReturnsWhenPromoted() {
         var store = new LockStore();
-        store.TryAcquire("/path/file.cs", "session-1");
+        store.EnqueueOrAcquire("/path/file.cs", "session-1");
+        store.EnqueueOrAcquire("/path/file.cs", "session-2");
 
         var waitTask = Task.Run(async () => {
-            await store.WaitForReleaseAsync("/path/file.cs", CancellationToken.None);
+            return await store.WaitForTurnAsync("/path/file.cs", "session-2", CancellationToken.None);
         });
 
         await Task.Delay(50);
         store.TryRelease("/path/file.cs", "session-1");
 
-        // Should complete quickly after release
-        await waitTask.WaitAsync(TimeSpan.FromSeconds(2));
+        var result = await waitTask.WaitAsync(TimeSpan.FromSeconds(2));
+        Assert.True(result);
     }
 
     [Fact]
-    public async Task WaitForReleaseAsync_RespectsTimeout() {
+    public async Task WaitForTurnAsync_RespectsTimeout() {
         var store = new LockStore();
-        store.TryAcquire("/path/file.cs", "session-1");
+        store.EnqueueOrAcquire("/path/file.cs", "session-1");
+        store.EnqueueOrAcquire("/path/file.cs", "session-2");
 
-        using var cts = new CancellationTokenSource(TimeSpan.FromMilliseconds(100));
+        using var cts = new CancellationTokenSource(TimeSpan.FromMilliseconds(200));
 
-        // Should return without throwing after internal timeout
-        await store.WaitForReleaseAsync("/path/file.cs", cts.Token);
+        var result = await store.WaitForTurnAsync("/path/file.cs", "session-2", cts.Token);
+
+        Assert.False(result); // Should timeout, not acquire
+    }
+
+    [Fact]
+    public async Task WaitForTurnAsync_ReturnsFalseIfNotInQueue() {
+        var store = new LockStore();
+
+        var result = await store.WaitForTurnAsync("/path/file.cs", "session-1", CancellationToken.None);
+
+        Assert.False(result);
     }
 }

@@ -122,49 +122,53 @@ public class FakeLockStore : ILockStore {
 
 ## Lock Acquisition & Retry Strategies
 
-### The Problem with Immediate Failure
+### The Problem with Poll-Based Waiting
 
-If a lock request fails immediately, Claude sees "Edit was blocked by hook" and may:
-- Retry the same edit (wasting tokens)
-- Give up and report failure to user
-- Try a different approach (unnecessary complexity)
+The original design used poll-based waiting where agents would repeatedly try to acquire a lock. This had several issues:
+- **No fairness**: When a lock was released, all waiting agents raced for it
+- **Timeout failures**: After 60s, agents would get errors and retry, creating wasteful cycles
+- **Agent gives up**: After multiple timeout errors, Claude would stop and ask the user what to do
 
-**Goal:** The hook should handle waiting transparently, so Claude never sees a failure unless something is genuinely wrong.
+### Queue-Based Waiting (Current Implementation)
 
-### Blocking Wait (Default Strategy)
-
-The hook waits until the lock is available, with a configurable timeout:
+The coordinator now uses a **FIFO queue** for fair lock distribution:
 
 ```
-Claude: "Edit file.ts"
-    │
-    ▼
-┌─────────────────────────────────────────┐
-│ PreToolUse Hook                         │
-│                                         │
-│ POST /lock?wait=true&timeout=60s        │
-│     ↓                                   │
-│ Coordinator holds request open          │
-│ until lock is available or timeout      │
-│     ↓                                   │
-│ Returns: { granted: true }              │
-│ Hook exits 0                            │
-└─────────────────────────────────────────┘
-    │
-    ▼
-Edit proceeds (Claude never knew there was contention)
+Claude A: "Edit file.ts"     Claude B: "Edit file.ts"
+    │                              │
+    ▼                              ▼
+┌─────────────────────────────────────────────────────────┐
+│ File Lock Coordinator                                    │
+│                                                          │
+│ Queue for file.ts:                                       │
+│   Position 1: Claude A (HOLDER) ─────────► Edit proceeds │
+│   Position 2: Claude B (WAITING) ─────────► Waits...     │
+│                                                          │
+│ When A releases:                                         │
+│   Position 1: Claude B (HOLDER) ─────────► Edit proceeds │
+└─────────────────────────────────────────────────────────┘
 ```
+
+### Key Benefits of Queue System
+
+| Aspect | Poll-Based (Old) | Queue-Based (New) |
+|--------|------------------|-------------------|
+| Fairness | Race condition | FIFO ordering |
+| Visibility | None | Position in queue |
+| Timeout behavior | ERROR after 60s | Stays in queue (300s default) |
+| Retry overhead | Multiple requests | Single request |
+| Agent experience | May give up | Waits patiently |
 
 ### What Claude Sees
 
-| Scenario | With Blocking Wait | Without Wait |
-|----------|-------------------|--------------|
-| Lock available | Edit succeeds | Edit succeeds |
-| Lock held briefly | Edit succeeds (after wait) | "Blocked by hook" error |
-| Lock held long | Edit succeeds (after wait) | "Blocked by hook" error |
-| Lock timeout | "Blocked by hook: timeout" | "Blocked by hook" error |
+| Scenario | Queue-Based Behavior |
+|----------|---------------------|
+| Lock available | Edit succeeds immediately |
+| Lock held briefly | Edit succeeds after queue wait |
+| Lock held long | Edit succeeds (position tracked) |
+| Timeout (5 min) | "Blocked by hook: timeout at position N" |
 
-**Key insight:** With blocking wait, Claude almost never sees failures. The hook handles contention transparently.
+**Key insight:** With queue-based waiting, Claude almost never sees failures. Agents wait in a fair queue with their position tracked.
 
 ---
 
@@ -352,25 +356,28 @@ namespace FileLockCoordinator;
 internal partial class AppJsonContext : JsonSerializerContext { }
 ```
 
-**LockStore.cs:**
+**LockStore.cs (Queue-Based Implementation):**
 ```csharp
 using System.Collections.Concurrent;
-using System.Threading.Channels;
 
 namespace FileLockCoordinator;
 
 public interface ILockStore {
-    bool TryAcquire(string file, string session);
+    QueueResult EnqueueOrAcquire(string file, string session);
     bool TryRelease(string file, string session);
     int ReleaseAll(string session);
     string? GetHolder(string file);
+    QueueInfo? GetQueueInfo(string file);
     IReadOnlyList<LockInfo> GetAllLocks();
-    Task WaitForReleaseAsync(string file, CancellationToken ct);
+    IReadOnlyList<QueueStatus> GetAllQueues();
+    Task<bool> WaitForTurnAsync(string file, string session, CancellationToken ct);
 }
 
+public record QueueResult(int Position, int QueueLength, bool Acquired);
+public record QueueInfo(string File, string Holder, int QueueLength, IReadOnlyList<string> Waiters);
+
 public class LockStore : ILockStore, IDisposable {
-    private readonly ConcurrentDictionary<string, LockEntry> _locks = new();
-    private readonly ConcurrentDictionary<string, Channel<bool>> _waitChannels = new();
+    private readonly ConcurrentDictionary<string, FileQueue> _queues = new();
     private readonly TimeSpan _ttl;
     private readonly Timer _cleanupTimer;
 
@@ -379,99 +386,70 @@ public class LockStore : ILockStore, IDisposable {
         _cleanupTimer = new Timer(CleanupExpired, null, _ttl, _ttl);
     }
 
-    public bool TryAcquire(string file, string session) {
-        var now = DateTime.UtcNow;
-        var newEntry = new LockEntry(session, now);
+    public QueueResult EnqueueOrAcquire(string file, string session) {
+        var queue = _queues.GetOrAdd(file, _ => new FileQueue());
 
-        // Try to add new lock
-        if (_locks.TryAdd(file, newEntry)) {
-            return true;
-        }
-
-        // Check if existing lock is ours or expired
-        if (_locks.TryGetValue(file, out var existing)) {
-            if (existing.Session == session) {
-                return true; // Already own it
+        lock (queue.Lock) {
+            // Check if session is already in queue
+            var existingPosition = queue.GetPosition(session);
+            if (existingPosition > 0) {
+                return new QueueResult(existingPosition, queue.Count, existingPosition == 1);
             }
-            if (now - existing.AcquiredAt > _ttl) {
-                // Expired, try to replace
-                if (_locks.TryUpdate(file, newEntry, existing)) {
-                    return true;
-                }
-            }
-        }
 
-        return false;
+            // Add to queue
+            queue.Enqueue(session);
+            var position = queue.GetPosition(session);
+            return new QueueResult(position, queue.Count, position == 1);
+        }
     }
 
     public bool TryRelease(string file, string session) {
-        if (_locks.TryGetValue(file, out var entry) && entry.Session == session) {
-            if (_locks.TryRemove(file, out _)) {
-                NotifyWaiters(file);
-                return true;
+        if (!_queues.TryGetValue(file, out var queue)) return false;
+
+        lock (queue.Lock) {
+            if (queue.Holder != session) return false;
+            queue.Dequeue();
+            queue.NotifyAll();  // Wake up next waiter
+            if (queue.Count == 0) _queues.TryRemove(file, out _);
+            return true;
+        }
+    }
+
+    public async Task<bool> WaitForTurnAsync(string file, string session, CancellationToken ct) {
+        if (!_queues.TryGetValue(file, out var queue)) return false;
+
+        while (!ct.IsCancellationRequested) {
+            lock (queue.Lock) {
+                var position = queue.GetPosition(session);
+                if (position == 0) return false;  // Not in queue
+                if (position == 1) return true;   // Our turn!
             }
+            // Wait for notification, poll every 5s as backup
+            await queue.WaitAsync().WaitAsync(TimeSpan.FromSeconds(5), ct);
         }
         return false;
     }
 
-    public int ReleaseAll(string session) {
-        var released = 0;
-        foreach (var kvp in _locks) {
-            if (kvp.Value.Session == session) {
-                if (_locks.TryRemove(kvp.Key, out _)) {
-                    released++;
-                    NotifyWaiters(kvp.Key);
-                }
-            }
-        }
-        return released;
-    }
+    // FileQueue maintains FIFO order with thread-safe notifications
+    private class FileQueue {
+        private readonly List<QueueEntry> _entries = new();
+        private TaskCompletionSource _notifyTcs = new();
 
-    public string? GetHolder(string file) {
-        return _locks.TryGetValue(file, out var entry) ? entry.Session : null;
-    }
+        public object Lock { get; } = new();
+        public int Count => _entries.Count;
+        public string? Holder => _entries.FirstOrDefault()?.Session;
 
-    public IReadOnlyList<LockInfo> GetAllLocks() {
-        return _locks.Select(kvp => new LockInfo(kvp.Value.Session, kvp.Key, kvp.Value.AcquiredAt))
-                     .ToList();
-    }
+        public void Enqueue(string session) => _entries.Add(new(session, DateTime.UtcNow));
+        public void Dequeue() { if (_entries.Count > 0) _entries.RemoveAt(0); }
+        public int GetPosition(string s) => _entries.FindIndex(e => e.Session == s) + 1;
 
-    public async Task WaitForReleaseAsync(string file, CancellationToken ct) {
-        var channel = _waitChannels.GetOrAdd(file, _ => Channel.CreateUnbounded<bool>());
-        try {
-            // Wait up to 1 second, then return to retry lock acquisition
-            using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
-            cts.CancelAfter(TimeSpan.FromSeconds(1));
-            await channel.Reader.ReadAsync(cts.Token);
-        }
-        catch (OperationCanceledException) {
-            // Expected - either timeout or external cancellation
+        public Task WaitAsync() => _notifyTcs.Task;
+        public void NotifyAll() {
+            var old = _notifyTcs;
+            _notifyTcs = new TaskCompletionSource();
+            old.TrySetResult();
         }
     }
-
-    private void NotifyWaiters(string file) {
-        if (_waitChannels.TryGetValue(file, out var channel)) {
-            // Non-blocking write to notify any waiters
-            channel.Writer.TryWrite(true);
-        }
-    }
-
-    private void CleanupExpired(object? state) {
-        var now = DateTime.UtcNow;
-        foreach (var kvp in _locks) {
-            if (now - kvp.Value.AcquiredAt > _ttl) {
-                if (_locks.TryRemove(kvp.Key, out _)) {
-                    NotifyWaiters(kvp.Key);
-                }
-            }
-        }
-    }
-
-    public void Dispose() {
-        _cleanupTimer.Dispose();
-    }
-
-    private record LockEntry(string Session, DateTime AcquiredAt);
 }
 ```
 
@@ -892,7 +870,7 @@ mv bin/FileLockCoordinator.exe bin/coordinator-win-x64.exe
 
 ## Implementation Phases
 
-### Phase 1: Core Coordinator (MVP)
+### Phase 1: Core Coordinator (MVP) ✅
 
 - [x] Lock acquisition (atomic, fail if held)
 - [x] Blocking wait for lock (default behavior)
@@ -902,28 +880,37 @@ mv bin/FileLockCoordinator.exe bin/coordinator-win-x64.exe
 - [x] Health check endpoint
 - [x] AOT-compatible JSON serialization
 
-### Phase 2: Hook Integration
+### Phase 2: Hook Integration ✅
 
 - [x] ensure-coordinator.sh (SessionStart)
 - [x] request-lock.sh (PreToolUse)
 - [x] release-lock.sh (PostToolUse)
-- [ ] Plugin manifest (plugin.json)
+- [x] Plugin manifest (plugin.json)
 
-### Phase 3: Testing & Polish
+### Phase 3: Testing & Polish ✅
 
-- [x] Unit tests with manual fakes (17 tests)
-- [ ] Integration tests against AOT binary
-- [ ] Graceful shutdown
-- [ ] Logging configuration
+- [x] Unit tests with manual fakes (21 tests)
+- [x] Integration tests with WebApplicationFactory (12 tests)
+- [x] Graceful shutdown
+- [x] Logging configuration
 - [x] Status endpoint with queue info
 
-### Phase 4: Distribution
+### Phase 4: Queue-Based Locking ✅ (NEW)
+
+- [x] FIFO queue system for fair lock distribution
+- [x] Queue position tracking in API responses
+- [x] `/queues` endpoint for visibility
+- [x] `WaitForTurnAsync` with proper notification
+- [x] Default timeout increased to 300s (5 min)
+- [x] Tests updated for queue-based API (33 total tests)
+
+### Phase 5: Distribution
 
 - [x] Build binary for macOS ARM64 (9 MB)
 - [ ] Build binaries for other platforms
 - [ ] Create plugin package
 - [ ] GitHub release workflow
-- [ ] Documentation
+- [ ] Documentation updates
 
 ---
 

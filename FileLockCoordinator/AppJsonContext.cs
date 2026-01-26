@@ -10,7 +10,13 @@ namespace FileLockCoordinator;
 [JsonSerializable(typeof(UnlockAllResponse))]
 [JsonSerializable(typeof(HealthResponse))]
 [JsonSerializable(typeof(StatusResponse))]
+[JsonSerializable(typeof(LocksResponse))]
 [JsonSerializable(typeof(LockInfo))]
 [JsonSerializable(typeof(IReadOnlyList<LockInfo>))]
+[JsonSerializable(typeof(QueueResponse))]
+[JsonSerializable(typeof(QueuesResponse))]
+[JsonSerializable(typeof(QueueStatusDto))]
+[JsonSerializable(typeof(IReadOnlyList<QueueStatusDto>))]
+[JsonSerializable(typeof(IReadOnlyList<string>))]
 [JsonSourceGenerationOptions(PropertyNamingPolicy = JsonKnownNamingPolicy.CamelCase)]
 public partial class AppJsonContext : JsonSerializerContext { }

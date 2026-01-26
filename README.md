@@ -51,13 +51,13 @@ This repository includes test files to demonstrate the lock coordinator working.
 ### Terminal 1 - First Agent
 
 ```bash
-claude -p "Edit the file test-files/shared-config.txt: Add a new section called [agent_one] at the bottom with these settings: name = Agent One, started_at = (current timestamp), task = primary configuration, status = working. Then WAIT and count to 20 slowly (print each number) before adding a final line 'completed = true' to your section."
+claude --print "Edit the file test-files/shared-config.txt: Add a new section called [agent_one] at the bottom with these settings: name = Agent One, started_at = (current timestamp), task = primary configuration, status = working. Then WAIT and count to 20 slowly (print each number) before adding a final line 'completed = true' to your section."
 ```
 
 ### Terminal 2 - Second Agent (start while Terminal 1 is counting)
 
 ```bash
-claude -p "Edit the file test-files/shared-config.txt: Add a new section called [agent_two] at the bottom with these settings: name = Agent Two, started_at = (current timestamp), task = secondary configuration, status = working, completed = true."
+claude --print "Edit the file test-files/shared-config.txt: Add a new section called [agent_two] at the bottom with these settings: name = Agent Two, started_at = (current timestamp), task = secondary configuration, status = working, completed = true."
 ```
 
 ### What to Expect
@@ -124,24 +124,29 @@ Look for these indicators:
 Health check. Returns `{"ok":true}`.
 
 ### `POST /lock`
-Acquire a lock on a file.
+Acquire a lock on a file (queue-based).
 
 Query parameters:
-- `wait` (default: `true`) - Block until lock available
-- `timeout` (default: `60s`) - Maximum wait time
+- `wait` (default: `true`) - Wait in queue until lock available
+- `timeout` (default: `300s`) - Maximum wait time
 
 Request body:
 ```json
 {"session": "session-id", "file": "/path/to/file"}
 ```
 
-Response:
+Response (lock acquired):
 ```json
-{"granted": true, "waited": 2.5}
+{"granted": true, "position": 1, "queueLength": 1, "waited": 2.5}
+```
+
+Response (queued, waiting):
+```json
+{"granted": false, "holder": "other-session", "position": 2, "queueLength": 2, "error": "Queued at position 2"}
 ```
 
 ### `POST /unlock`
-Release a lock.
+Release a lock (promotes next in queue).
 
 Request body:
 ```json
@@ -158,6 +163,24 @@ Request body:
 
 ### `GET /status`
 List all active locks.
+
+### `GET /queues`
+List all queues with waiters.
+
+Response:
+```json
+{
+  "count": 1,
+  "queues": [
+    {
+      "file": "/path/to/file",
+      "holder": "session-1",
+      "acquiredAt": "2026-01-26T...",
+      "queueLength": 3,
+      "waiters": ["session-2", "session-3"]
+    }
+  ]
+}
 
 ## Building from Source
 

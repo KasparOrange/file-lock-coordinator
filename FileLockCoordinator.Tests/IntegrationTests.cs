@@ -41,14 +41,14 @@ public class IntegrationTests : IClassFixture<WebApplicationFactory<Program>>
     }
 
     [Fact]
-    public async Task Lock_WhenHeldByOther_DeniedImmediately()
+    public async Task Lock_WhenHeldByOther_JoinsQueue()
     {
         // First session acquires lock
         await _client.PostAsJsonAsync("/lock",
             new LockRequest("session-holder", "/test/conflict.cs"),
             AppJsonContext.Default.LockRequest);
 
-        // Second session tries to acquire (no-wait mode)
+        // Second session tries to acquire (no-wait mode) - joins queue but doesn't wait
         var response = await _client.PostAsJsonAsync("/lock?wait=false",
             new LockRequest("session-requester", "/test/conflict.cs"),
             AppJsonContext.Default.LockRequest);
@@ -58,7 +58,9 @@ public class IntegrationTests : IClassFixture<WebApplicationFactory<Program>>
         Assert.NotNull(result);
         Assert.False(result.Granted);
         Assert.Equal("session-holder", result.Holder);
-        Assert.Contains("Lock held by another session", result.Error);
+        Assert.Equal(2, result.Position);
+        Assert.Equal(2, result.QueueLength);
+        Assert.Contains("Queued at position", result.Error);
     }
 
     [Fact]
@@ -210,5 +212,57 @@ public class IntegrationTests : IClassFixture<WebApplicationFactory<Program>>
         // Our locks should be in the list
         Assert.Contains(result.Locks, l => l.File == file1 && l.Session == session);
         Assert.Contains(result.Locks, l => l.File == file2 && l.Session == session);
+    }
+
+    [Fact]
+    public async Task Queues_ReturnsAllQueuesWithWaiters()
+    {
+        var file = $"/test/queues-{Guid.NewGuid()}.cs";
+
+        // Build a queue with 3 sessions
+        await _client.PostAsJsonAsync("/lock", new LockRequest("holder", file), AppJsonContext.Default.LockRequest);
+        await _client.PostAsJsonAsync("/lock?wait=false", new LockRequest("waiter-1", file), AppJsonContext.Default.LockRequest);
+        await _client.PostAsJsonAsync("/lock?wait=false", new LockRequest("waiter-2", file), AppJsonContext.Default.LockRequest);
+
+        // Get queues
+        var response = await _client.GetAsync("/queues");
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        var result = await response.Content.ReadFromJsonAsync<QueuesResponse>(AppJsonContext.Default.QueuesResponse);
+        Assert.NotNull(result);
+
+        var queue = result.Queues.FirstOrDefault(q => q.File == file);
+        Assert.NotNull(queue);
+        Assert.Equal("holder", queue.Holder);
+        Assert.Equal(3, queue.QueueLength);
+        Assert.Equal(2, queue.Waiters.Count);
+        Assert.Contains("waiter-1", queue.Waiters);
+        Assert.Contains("waiter-2", queue.Waiters);
+    }
+
+    [Fact]
+    public async Task Lock_ReturnsQueuePosition()
+    {
+        var file = $"/test/position-{Guid.NewGuid()}.cs";
+
+        // First acquires
+        var r1 = await _client.PostAsJsonAsync("/lock", new LockRequest("s1", file), AppJsonContext.Default.LockRequest);
+        var result1 = await r1.Content.ReadFromJsonAsync<LockResponse>(AppJsonContext.Default.LockResponse);
+        Assert.True(result1!.Granted);
+        Assert.Equal(1, result1.Position);
+
+        // Second joins queue
+        var r2 = await _client.PostAsJsonAsync("/lock?wait=false", new LockRequest("s2", file), AppJsonContext.Default.LockRequest);
+        var result2 = await r2.Content.ReadFromJsonAsync<LockResponse>(AppJsonContext.Default.LockResponse);
+        Assert.False(result2!.Granted);
+        Assert.Equal(2, result2.Position);
+        Assert.Equal(2, result2.QueueLength);
+
+        // Third joins queue
+        var r3 = await _client.PostAsJsonAsync("/lock?wait=false", new LockRequest("s3", file), AppJsonContext.Default.LockRequest);
+        var result3 = await r3.Content.ReadFromJsonAsync<LockResponse>(AppJsonContext.Default.LockResponse);
+        Assert.False(result3!.Granted);
+        Assert.Equal(3, result3.Position);
+        Assert.Equal(3, result3.QueueLength);
     }
 }

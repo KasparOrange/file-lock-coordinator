@@ -48,17 +48,21 @@ Expected response: `{"ok":true}`
 
 This repository includes test files to demonstrate the lock coordinator working. Open **two terminal windows** in the same project directory and run these commands to create an intentional conflict.
 
+> **Tip:** For best results, enable auto-approve for edits to the test files so agents don't block on confirmation dialogs. Alternatively, approve edits quickly when prompted.
+
 ### Terminal 1 - First Agent
 
 ```bash
-claude --print "Edit the file test-files/shared-config.txt: Add a new section called [agent_one] at the bottom with these settings: name = Agent One, started_at = (current timestamp), task = primary configuration, status = working. Then WAIT and count to 20 slowly (print each number) before adding a final line 'completed = true' to your section."
+claude -p "Edit the file test-files/shared-config.txt: Add a new section called [agent_one] at the bottom with these settings: name = Agent One, started_at = (current timestamp), task = primary configuration, status = working. Then WAIT and count to 20 slowly (print each number) before adding a final line 'completed = true' to your section." --allowedTools Edit Write
 ```
 
 ### Terminal 2 - Second Agent (start while Terminal 1 is counting)
 
 ```bash
-claude --print "Edit the file test-files/shared-config.txt: Add a new section called [agent_two] at the bottom with these settings: name = Agent Two, started_at = (current timestamp), task = secondary configuration, status = working, completed = true."
+claude -p "Edit the file test-files/shared-config.txt: Add a new section called [agent_two] at the bottom with these settings: name = Agent Two, started_at = (current timestamp), task = secondary configuration, status = working, completed = true." --allowedTools Edit Write
 ```
+
+> **Note:** The `-p` (or `--print`) flag runs Claude in non-interactive mode. The `--allowedTools Edit Write` flag grants permission to edit files without interactive approval. Without it, edits would fail in non-interactive mode.
 
 ### What to Expect
 
@@ -68,32 +72,34 @@ claude --print "Edit the file test-files/shared-config.txt: Add a new section ca
 
 **With the lock coordinator:**
 - Agent One acquires the lock and starts editing
-- Agent Two's edit is **blocked** (waits) until Agent One finishes
+- Agent Two is **queued** (waits at position 2) until Agent One finishes
 - Both sections appear correctly in the final file
 
 ### How to Confirm It's Working
 
 Look for these indicators:
 
-1. **In Terminal 2's output** - You may see a delay before the edit starts (while waiting for the lock)
+1. **In Terminal 2's output** - You may see a delay before the edit starts (while waiting in queue)
 
 2. **Hook output** - If the wait is longer than 1 second, you'll see:
    ```
-   Lock acquired after 15.3s wait
+   Lock acquired after 15.3s queue wait
    ```
 
-3. **Check coordinator status** - While Agent One is editing, run:
+3. **Check queue status** - While Agent One is editing, run:
    ```bash
-   curl -s http://localhost:9876/status | jq
+   curl -s http://localhost:9876/queues | jq
    ```
-   You'll see the active lock:
+   You'll see the queue:
    ```json
    {
-     "locks": [
+     "count": 1,
+     "queues": [
        {
-         "session": "session-id-here",
          "file": "/path/to/test-files/shared-config.txt",
-         "acquiredAt": "2024-01-25T..."
+         "holder": "session-a",
+         "queueLength": 2,
+         "waiters": ["session-b"]
        }
      ]
    }

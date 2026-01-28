@@ -13,7 +13,7 @@
       {
         "matcher": "Edit|Write",
         "type": "command",
-        "command": "${CLAUDE_PLUGIN_ROOT}/hooks/request-lock.sh --wait --timeout 60"
+        "command": "${CLAUDE_PLUGIN_ROOT}/hooks/request-lock.sh --wait --timeout 300"
       }
     ],
     "PostToolUse": [
